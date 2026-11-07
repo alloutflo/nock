@@ -1,6 +1,7 @@
 import http from 'node:http'
 import https from 'node:https'
 import { URLSearchParams } from 'node:url'
+import { runInThisContext } from 'node:vm'
 import zlib from 'node:zlib'
 import sinon from 'sinon'
 import { expect } from 'chai'
@@ -144,6 +145,45 @@ describe('Recorder', () => {
       body: requestBody,
     })
   })
+
+  for (const outputObjects of [true, false]) {
+    it(`replays multiple Set-Cookie headers from ${outputObjects ? 'objects' : 'code'}`, async () => {
+      const cookies = [
+        'session=abc; Expires=Wed, 21 Oct 2030 07:28:00 GMT; HttpOnly',
+        'csrf=xyz; Path=/',
+      ]
+      if (!outputObjects) {
+        // Generated code must include cookies beyond the default inspect limit.
+        cookies.push(...Array.from({ length: 99 }, (_, i) => `cookie${i}=x`))
+      }
+      const { origin } = await servers.startHttpServer((request, response) => {
+        response.setHeader('Set-Cookie', cookies)
+        response.end('ok')
+      })
+
+      nock.recorder.clear()
+      nock.recorder.rec({ dont_print: true, output_objects: outputObjects })
+      const live = await fetch(origin)
+      expect(live.headers.getSetCookie()).to.deep.equal(cookies)
+      expect(await live.text()).to.equal('ok')
+      const recorded = nock.recorder.play()
+      expect(recorded).to.have.lengthOf(1)
+
+      nock.restore()
+      nock.activate()
+      nock.disableNetConnect()
+      if (outputObjects) {
+        expect(recorded[0].rawHeaders['set-cookie']).to.deep.equal(cookies)
+        nock.define(recorded)
+      } else {
+        runInThisContext(`(nock) => { ${recorded[0]} }`)(nock)
+      }
+
+      const replay = await fetch(origin)
+      expect(replay.headers.getSetCookie()).to.deep.equal(cookies)
+      expect(await replay.text()).to.equal('ok')
+    })
+  }
 
   it('logs recorded objects', async () => {
     const gotRequest = sinon.spy()

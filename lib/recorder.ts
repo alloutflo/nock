@@ -35,6 +35,17 @@ function getMethod(request: Request) {
   return request.method || 'GET'
 }
 
+function getResponseHeaders(headers: Headers) {
+  const rawHeaders: NonNullable<Definition['rawHeaders']> = Object.fromEntries(
+    headers.entries(),
+  )
+  const cookies = headers.getSetCookie()
+  if (cookies.length > 1) {
+    rawHeaders['set-cookie'] = cookies
+  }
+  return rawHeaders
+}
+
 function getBodyFromChunks(chunks: Buffer[], headers?: Record<string, any>) {
   // If we have headers and there is content-encoding it means that the body
   // shouldn't be merged but instead persisted as an array of hex strings so
@@ -77,9 +88,10 @@ async function generateRequestAndResponseObject(
   request: Request,
   response: Response,
 ) {
+  const rawHeaders = getResponseHeaders(response.headers)
   const { body, isUtf8Representable } = getBodyFromChunks(
     [Buffer.from(await response.arrayBuffer())],
-    Object.fromEntries(response.headers.entries()),
+    rawHeaders,
   )
   const url = new URL(request.url)
   const reqheaders = Object.fromEntries(request.headers.entries())
@@ -91,7 +103,7 @@ async function generateRequestAndResponseObject(
     body: getBodyFromChunks([Buffer.from(await request.arrayBuffer())]).body,
     status: response.status,
     response: body,
-    rawHeaders: Object.fromEntries(response.headers.entries()),
+    rawHeaders,
     reqheaders: Object.keys(reqheaders).length > 0 ? reqheaders : undefined,
     // When content-encoding is enabled, isUtf8Representable is `undefined`,
     // so we explicitly check for `false`.
@@ -156,7 +168,10 @@ async function generateRequestAndResponse(
 
   const statusCode = String(response.status)
   const stringifiedResponseBody = JSON.stringify(responseBody)
-  const headers = inspect(Object.fromEntries(response.headers.entries()))
+  const headers = inspect(getResponseHeaders(response.headers), {
+    maxArrayLength: null,
+    maxStringLength: null,
+  })
   lines.push(`  .reply(${statusCode}, ${stringifiedResponseBody}, ${headers});`)
 
   return lines.join('\n')
